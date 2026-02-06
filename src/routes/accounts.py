@@ -31,8 +31,7 @@ from schemas.accounts import (
     UserRegistrationResponseSchema,
 )
 from security.interfaces import JWTAuthManagerInterface
-from security.passwords import PasswordManager
-
+from security.passwords import hash_password, verify_password
 
 router = APIRouter(prefix="/api/v1/accounts", tags=["Accounts"])
 
@@ -72,7 +71,7 @@ def register(
 
     try:
         group = _get_default_user_group(db)
-        hashed_password = PasswordManager.hash_password(user_data.password)
+        hashed_password = hash_password(user_data.password)
 
         user = UserModel(
             email=user_data.email,
@@ -106,7 +105,10 @@ def activate_account(
 ):
     user = db.query(UserModel).filter(UserModel.email == payload.email).first()
     if user is None:
-        raise HTTPException(status_code=400, detail="Invalid or expired activation token.")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired activation token.",
+        )
 
     if cast(bool, user.is_active):
         raise HTTPException(status_code=400, detail="User account is already active.")
@@ -124,7 +126,10 @@ def activate_account(
         if token_rec is not None and _is_expired(cast(datetime, token_rec.expires_at)):
             db.delete(token_rec)
             db.commit()
-        raise HTTPException(status_code=400, detail="Invalid or expired activation token.")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired activation token.",
+        )
 
     user.is_active = True
     db.delete(token_rec)
@@ -186,7 +191,7 @@ def password_reset_complete(
         raise HTTPException(status_code=400, detail="Invalid email or token.")
 
     try:
-        user.hashed_password = PasswordManager.hash_password(payload.password)
+        user.hashed_password = hash_password(payload.password)
         db.delete(token_rec)
         db.commit()
         return MessageResponseSchema(message="Password reset successfully.")
@@ -201,12 +206,12 @@ def password_reset_complete(
 @router.post("/login/", response_model=UserLoginResponseSchema)
 def login(
     payload: UserLoginRequestSchema,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_db_attach_db_fix := get_db),  # no-op, just keeps signature same
     settings: BaseAppSettings = Depends(get_settings),
     jwt_manager: JWTAuthManagerInterface = Depends(get_jwt_auth_manager),
 ):
     user = db.query(UserModel).filter(UserModel.email == payload.email).first()
-    if user is None or not PasswordManager.verify_password(payload.password, user.hashed_password):
+    if user is None or not verify_password(payload.password, user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
     if not cast(bool, user.is_active):
